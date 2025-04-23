@@ -25,15 +25,22 @@ const CreateTrip = () => {
   const [openDialLog, setOpenDialLog] = useState(false);
   const [showSignUp, setShowSignUp] = useState(false);
   const [register, setRegister] = useState({
-    name: '',
-    email: '',
-    password: '',
+    name: "",
+    email: "",
+    password: "",
   });
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [formData, setFormData] = useState({});
   const [loading, setLoading] = useState(false);
+  const [isUserSignedIn, setIsUserSignedIn] = useState(false);
   const navigate = useNavigate();
+
+  // Check if user is signed in on component mount
+  useEffect(() => {
+    const user = localStorage.getItem("user");
+    setIsUserSignedIn(!!user);
+  }, []);
 
   const handleChange = (e) => {
     setRegister({
@@ -48,13 +55,16 @@ const CreateTrip = () => {
     setSuccess(null);
 
     try {
-      const response = await axios.post(`${import.meta.env.VITE_BACKEND_URL}/api/auth/register`, register);
+      const response = await axios.post(
+        `${import.meta.env.VITE_BACKEND_URL}/api/auth/register`,
+        register
+      );
       setSuccess(response.data.message);
       // Clear form after successful submission
       setRegister({
-        name: '',
-        email: '',
-        password: '',
+        name: "",
+        email: "",
+        password: "",
       });
       // Close signup form after successful registration
       setTimeout(() => {
@@ -62,7 +72,7 @@ const CreateTrip = () => {
         setOpenDialLog(true);
       }, 2000);
     } catch (err) {
-      setError(err.response?.data?.error || 'An error occurred');
+      setError(err.response?.data?.error || "An error occurred");
     }
   };
 
@@ -74,7 +84,7 @@ const CreateTrip = () => {
   };
 
   useEffect(() => {
-    console.log(formData);
+    console.log("Form data updated:", formData);
   }, [formData]);
 
   const GetUserProfile = (tokenInfo) => {
@@ -89,65 +99,142 @@ const CreateTrip = () => {
         }
       )
       .then((resp) => {
-        console.log(resp);
+        console.log("Google user profile:", resp);
         localStorage.setItem("user", JSON.stringify(resp.data));
+        setIsUserSignedIn(true);
         setOpenDialLog(false);
         onGenerateTrip();
       })
       .catch((error) => {
         console.error("Error fetching user profile:", error);
+        toast.error("Failed to get user profile from Google");
       });
   };
 
   const login = useGoogleLogin({
     onSuccess: (codeResp) => GetUserProfile(codeResp),
-    onError: (error) => console.log(error),
+    onError: (error) => {
+      console.log("Google login error:", error);
+      toast.error("Google login failed. Please try again.");
+    },
     flow: "implicit", // Use implicit flow to avoid popup issues
     popup: true,
     ux_mode: "popup",
   });
 
   const onGenerateTrip = async () => {
-    const user = localStorage.getItem('user');
+    try {
+      const user = localStorage.getItem("user");
 
-    if (!user) {
-      setOpenDialLog(true);
-      return;
+      if (!user) {
+        setOpenDialLog(true);
+        return;
+      }
+
+      // Form validation
+      if (!formData?.location) {
+        toast.error("Please select a destination");
+        return;
+      }
+      
+      if (!formData?.noOfDays) {
+        toast.error("Please enter number of days");
+        return;
+      }
+      
+      if (formData?.noOfDays > 5) {
+        toast.error("Trip duration cannot exceed 5 days");
+        return;
+      }
+      
+      if (!formData?.noOfPeople) {
+        toast.error("Please select who you're traveling with");
+        return;
+      }
+      
+      if (!formData?.budget) {
+        toast.error("Please select your budget");
+        return;
+      }
+
+      setLoading(true);
+      
+      console.log("Generating trip with data:", formData);
+      
+      const FINAL_PROMPT = AI_PROMPT
+        .replace("{location}", formData?.location?.label)
+        .replace("{noOfDays}", formData?.noOfDays)
+        .replace("{noOfPeople}", formData?.noOfPeople)
+        .replace("{budget}", formData?.budget)
+        .replace("{noOfDays}", formData?.noOfDays);
+
+      console.log("Sending AI prompt:", FINAL_PROMPT);
+      
+      const result = await chatSession.sendMessage(FINAL_PROMPT);
+      const responseText = result?.response?.text();
+      console.log("AI Response:", responseText);
+      
+      try {
+        // Test if the response is valid JSON
+        const parsedJson = JSON.parse(responseText);
+        console.log("Parsed JSON:", parsedJson);
+        
+        // If we got here, JSON is valid
+        SaveAiTrip(responseText);
+      } catch (error) {
+        console.error("Error parsing AI response:", error);
+        toast.error("Couldn't create trip plan. The AI response format was invalid.");
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error("Error in trip generation:", error);
+      toast.error("Failed to generate trip. Please try again.");
+      setLoading(false);
     }
-
-    if (formData?.noOfDays > 5 || !formData?.location || !formData?.noOfPeople || !formData?.budget) {
-      toast("Please enter the details");
-      return;
-    }
-    
-    setLoading(true);
-    const FINAL_PROMPT = AI_PROMPT
-      .replace("{location}", formData?.location?.label)
-      .replace("{noOfDays}", formData?.noOfDays)
-      .replace("{noOfPeople}", formData?.noOfPeople)
-      .replace("{budget}", formData?.budget)
-      .replace("{noOfDays}", formData?.noOfDays);
-
-    const result = await chatSession.sendMessage(FINAL_PROMPT);
-    console.log("__", result?.response?.text());
-    setLoading(false);
-    SaveAiTrip(result?.response?.text());
   };
-  
+
   const SaveAiTrip = async (TripData) => {
-    setLoading(true);
-    const user = JSON.parse(localStorage.getItem('user'));
-    const docId = Date.now().toString();
-    await setDoc(doc(db, "Aitrips", docId), {
-      userSelection: formData,
-      tripData: JSON.parse(TripData), 
-      userEmail: user?.email,
-      id: docId
-    });
-    setLoading(false);
-    navigate('/viewTrip/' + docId);
+    try {
+      const user = JSON.parse(localStorage.getItem("user"));
+      if (!user || !user.email) {
+        toast.error("User information is missing. Please sign in again.");
+        setLoading(false);
+        return;
+      }
+      
+      const docId = Date.now().toString();
+      const parsedData = JSON.parse(TripData);
+      
+      console.log("Saving trip to Firestore with ID:", docId);
+      
+      await setDoc(doc(db, "Aitrips", docId), {
+        userSelection: formData,
+        tripData: parsedData,
+        userEmail: user.email,
+        id: docId,
+        createdAt: new Date().toISOString()
+      });
+      
+      console.log("Trip saved successfully");
+      toast.success("Trip generated successfully!");
+      setLoading(false);
+      navigate("/viewTrip/" + docId);
+    } catch (error) {
+      console.error("Error saving trip:", error);
+      toast.error("Failed to save trip. Please try again.");
+      setLoading(false);
+    }
   };
-  
+
+  // Function to handle button click - opens dialog if not signed in
+  const handleGenerateClick = () => {
+    if (isUserSignedIn) {
+      onGenerateTrip();
+    } else {
+      setOpenDialLog(true);
+    }
+  };
+
   return (
     <div className="bg-white min-h-screen w-full">
       <div className="sm:px-10 md:px-32 lg:px-56 xl:px-40 px-5 mt-10 flex flex-col items-center text-center bg-white">
@@ -185,9 +272,11 @@ const CreateTrip = () => {
             <Input
               placeholder="Ex. 3"
               type="number"
+              max="5"
               className="w-full p-2 border rounded-md"
               onChange={(e) => handleInput("noOfDays", e.target.value)}
             />
+            <p className="text-sm text-gray-500 mt-1">Maximum 5 days</p>
           </div>
 
           {/* Budget Selection */}
@@ -200,7 +289,7 @@ const CreateTrip = () => {
                   key={index}
                   className={`p-4 border rounded-lg hover:shadow-lg flex flex-col items-center justify-center 
                   text-center transition-all duration-300 cursor-pointer 
-                  ${formData?.budget == item.title && "shadow-lg border-black"}`}
+                  ${formData?.budget === item.title ? "shadow-lg border-black" : ""}`}
                 >
                   <h2 className="text-3xl">{item.icon}</h2>
                   <h2 className="font-bold text-lg mt-2">{item.title}</h2>
@@ -222,7 +311,7 @@ const CreateTrip = () => {
                   key={index}
                   className={`p-4 border rounded-lg bg-white hover:shadow-lg flex flex-col items-center 
                   justify-center text-center transition-all duration-300 cursor-pointer
-                  ${formData?.noOfPeople == item.people && "shadow-lg border-black"}`}
+                  ${formData?.noOfPeople === item.people ? "shadow-lg border-black" : ""}`}
                 >
                   <h2 className="text-3xl">{item.icon}</h2>
                   <h2 className="font-bold text-lg mt-2">{item.title}</h2>
@@ -234,13 +323,21 @@ const CreateTrip = () => {
         </div>
       </div>
 
-      {/* Button container */}
+      {/* Button container with conditional styling */}
       <div className="bg-white mb-10 w-full flex justify-center py-5">
-        <Button disabled={loading} onClick={onGenerateTrip} className="text-lg px-6 py-2">
+        <Button
+          disabled={loading}
+          onClick={handleGenerateClick}
+          className={`text-lg px-6 py-2 ${
+            !isUserSignedIn ? "bg-gray-400 hover:bg-gray-500" : ""
+          }`}
+        >
           {loading ? (
             <AiOutlineLoading3Quarters className="h-7 w-7 animate-spin" />
-          ) : (
+          ) : isUserSignedIn ? (
             "Generate Trip"
+          ) : (
+            "Sign In to Generate Trip"
           )}
         </Button>
       </div>
@@ -273,7 +370,7 @@ const CreateTrip = () => {
             </Button>
             <div className="mt-4 text-center text-sm text-gray-500">
               Don't have an account?{" "}
-              <span 
+              <span
                 className="text-blue-500 cursor-pointer hover:underline"
                 onClick={() => {
                   setOpenDialLog(false);
@@ -286,7 +383,7 @@ const CreateTrip = () => {
           </div>
         </DialogContent>
       </Dialog>
-      
+
       {/* Sign Up Dialog */}
       <Dialog open={showSignUp} onOpenChange={setShowSignUp}>
         <DialogContent>
@@ -296,7 +393,7 @@ const CreateTrip = () => {
               Create a new account to get started
             </DialogDescription>
           </DialogHeader>
-          
+
           <form onSubmit={handleSubmit} className="mt-4 space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">Username:</label>
@@ -331,17 +428,17 @@ const CreateTrip = () => {
                 className="w-full p-2 border rounded-md bg-white"
               />
             </div>
-            
+
             {error && <p className="text-red-500 text-sm">{error}</p>}
             {success && <p className="text-green-500 text-sm">{success}</p>}
-            
+
             <Button type="submit" className="w-full">
               Sign Up
             </Button>
-            
+
             <div className="text-center text-sm text-gray-500">
               Already have an account?{" "}
-              <span 
+              <span
                 className="text-blue-500 cursor-pointer hover:underline"
                 onClick={() => {
                   setShowSignUp(false);
